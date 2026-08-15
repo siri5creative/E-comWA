@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Environment files — never commit real secrets. Each app documents its
+# required vars in .env.example (api/.env.example, web/.env.example).
+.env
+.env.local
+.env.*.local
+api/.env
+web/.env.local
+
+# Go build artifacts (api/ is normally run with `go run .`, not built to
+# a binary, but ignore common output names just in case)
+api/api
+api/*.exe
+api/main
+
+# web/ has its own .gitignore covering node_modules, .next, etc.

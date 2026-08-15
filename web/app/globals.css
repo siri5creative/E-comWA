@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens from design-brief-ecommerce-nike-style.md section 3: fixed
+ * monochrome + red-accent brand palette. This does not adapt to OS
+ * dark-mode preference — it's the brand's own look, not a light/dark theme.
+ */
+@theme {
+  --color-ink: #111111;
+  --color-paper: #ffffff;
+  --color-accent: #e4002b;
+  --color-border: #e5e5e5;
+  --font-sans: var(--font-inter);
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
