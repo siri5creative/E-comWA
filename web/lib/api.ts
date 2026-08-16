@@ -15,13 +15,16 @@ function baseUrl(): string {
 }
 
 export function goFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${baseUrl()}/api/v1${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
+  // `new Headers(init?.headers)` normalizes any RequestInit["headers"] shape
+  // (a Headers instance, a plain object, or an array of tuples) — a plain
+  // object spread (`{ ...init?.headers }`) silently drops everything when
+  // init.headers is already a Headers instance, since Headers doesn't
+  // expose its entries as own enumerable properties.
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  return fetch(`${baseUrl()}/api/v1${path}`, { ...init, headers });
 }
 
 // Same as goFetch, but attaches the current admin's Supabase access token

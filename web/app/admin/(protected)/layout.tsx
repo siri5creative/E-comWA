@@ -1,6 +1,6 @@
 import { goFetchAsAdmin } from "@/lib/api";
 import type { AdminMe } from "@/lib/types";
-import { AdminNav } from "@/components/admin/AdminNav";
+import { AdminSidebar } from "@/components/admin/AdminSidebar";
 import { LogoutLink } from "@/components/admin/LogoutLink";
 import { NotificationPermission } from "@/components/admin/NotificationPermission";
 
@@ -32,10 +32,10 @@ export default async function AdminLayout({
   const admin = (await res.json()) as AdminMe;
 
   return (
-    <>
+    <div className="flex min-h-screen">
       <NotificationPermission />
-      <AdminNav admin={admin} />
-      <main className="flex-1 bg-paper">{children}</main>
-    </>
+      <AdminSidebar admin={admin} />
+      <main className="flex-1 overflow-x-hidden bg-paper">{children}</main>
+    </div>
   );
 }

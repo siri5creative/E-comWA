@@ -3,9 +3,11 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -28,9 +30,16 @@ type supabaseClaims struct {
 // AdminAuth verifies Supabase Auth tokens and checks the caller against the
 // `admins` table (Owner/Staff), per PRD section 8: "role dicek di setiap
 // endpoint yang sensitif — bukan hanya dicek di frontend."
+//
+// Supabase projects sign Auth tokens one of two ways: the legacy HS256
+// shared secret (JWTSecret), or — for projects created with the newer
+// asymmetric "JWT Signing Keys" — ES256, verified against the project's
+// published JWKS (JWKS). Which one a given token uses is read from its
+// header, so both can be configured at once for compatibility.
 type AdminAuth struct {
 	Pool      *pgxpool.Pool
 	JWTSecret string
+	JWKS      keyfunc.Keyfunc
 }
 
 // RequireAdmin accepts any authenticated admin, regardless of role.
@@ -58,6 +67,26 @@ func (a *AdminAuth) RequireOwner(next http.Handler) http.Handler {
 	}))
 }
 
+// verificationKey picks the right key material for the token's own
+// signing algorithm, so a single AdminAuth works regardless of which
+// signing mode the Supabase project uses.
+func (a *AdminAuth) verificationKey(t *jwt.Token) (any, error) {
+	switch t.Method.Alg() {
+	case "HS256":
+		if a.JWTSecret == "" {
+			return nil, fmt.Errorf("token is HS256 but SUPABASE_JWT_SECRET is not configured")
+		}
+		return []byte(a.JWTSecret), nil
+	case "ES256":
+		if a.JWKS == nil {
+			return nil, fmt.Errorf("token is ES256 but SUPABASE_URL (JWKS) is not configured")
+		}
+		return a.JWKS.Keyfunc(t)
+	default:
+		return nil, fmt.Errorf("unsupported signing algorithm %q", t.Method.Alg())
+	}
+}
+
 func (a *AdminAuth) authenticate(w http.ResponseWriter, r *http.Request) (*models.Admin, bool) {
 	token, ok := bearerToken(r)
 	if !ok {
@@ -66,9 +95,8 @@ func (a *AdminAuth) authenticate(w http.ResponseWriter, r *http.Request) (*model
 	}
 
 	claims := &supabaseClaims{}
-	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (any, error) {
-		return []byte(a.JWTSecret), nil
-	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithAudience("authenticated"))
+	parsed, err := jwt.ParseWithClaims(token, claims, a.verificationKey,
+		jwt.WithValidMethods([]string{"HS256", "ES256"}), jwt.WithAudience("authenticated"))
 	if err != nil || !parsed.Valid || claims.Subject == "" {
 		httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid or expired token")
 		return nil, false

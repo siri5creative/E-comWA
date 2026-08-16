@@ -11,7 +11,18 @@ import (
 type Config struct {
 	// DatabaseURL is the Supavisor pooler connection string from Supabase.
 	DatabaseURL string
-	// SupabaseJWTSecret verifies admin (Owner/Staff) Supabase Auth tokens.
+	// SupabaseURL is the project's base URL (https://<ref>.supabase.co).
+	// Not in IMPLEMENTATION.md's documented api/.env list — added because
+	// admin JWT verification needs it: Supabase projects created with the
+	// newer asymmetric "JWT Signing Keys" sign Auth tokens with ES256, not
+	// the legacy HS256 shared secret, and verifying ES256 requires fetching
+	// the project's public keys from
+	// <SUPABASE_URL>/auth/v1/.well-known/jwks.json.
+	SupabaseURL string
+	// SupabaseJWTSecret verifies admin (Owner/Staff) Supabase Auth tokens
+	// signed with the legacy HS256 shared secret. Projects using the newer
+	// asymmetric signing keys (see SupabaseURL above) don't need this —
+	// at least one of SupabaseJWTSecret or SupabaseURL must be set.
 	SupabaseJWTSecret string
 	// SupabaseServiceRoleKey is used for operations that must bypass RLS
 	// via the Supabase HTTP APIs (e.g. Auth Admin API when creating admin
@@ -40,6 +51,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		DatabaseURL:                 os.Getenv("DATABASE_URL"),
+		SupabaseURL:                 os.Getenv("SUPABASE_URL"),
 		SupabaseJWTSecret:           os.Getenv("SUPABASE_JWT_SECRET"),
 		SupabaseServiceRoleKey:      os.Getenv("SUPABASE_SERVICE_ROLE_KEY"),
 		FirebaseServiceAccountKey:   os.Getenv("FIREBASE_SERVICE_ACCOUNT_KEY"),
@@ -70,8 +82,8 @@ func Load() (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("DATABASE_URL is required")
 	}
-	if cfg.SupabaseJWTSecret == "" {
-		return cfg, fmt.Errorf("SUPABASE_JWT_SECRET is required")
+	if cfg.SupabaseJWTSecret == "" && cfg.SupabaseURL == "" {
+		return cfg, fmt.Errorf("at least one of SUPABASE_JWT_SECRET or SUPABASE_URL is required (to verify admin JWTs)")
 	}
 
 	return cfg, nil

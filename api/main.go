@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/MicahParks/keyfunc/v3"
 	"github.com/joho/godotenv"
 
 	"github.com/siri5creative/E-comWA/api/internal/config"
@@ -70,7 +73,19 @@ func run() error {
 		slog.Warn("POS_API_KEY not set — /pos/* endpoints will reject all requests")
 	}
 
-	adminAuth := &middleware.AdminAuth{Pool: pool, JWTSecret: cfg.SupabaseJWTSecret}
+	// Projects using Supabase's newer asymmetric "JWT Signing Keys" sign
+	// Auth tokens with ES256, verified against the project's published
+	// JWKS rather than a shared secret — see internal/middleware/auth_admin.go.
+	var jwks keyfunc.Keyfunc
+	if cfg.SupabaseURL != "" {
+		jwksURL := strings.TrimRight(cfg.SupabaseURL, "/") + "/auth/v1/.well-known/jwks.json"
+		jwks, err = keyfunc.NewDefaultCtx(ctx, []string{jwksURL})
+		if err != nil {
+			return fmt.Errorf("fetch Supabase JWKS from %s: %w", jwksURL, err)
+		}
+	}
+
+	adminAuth := &middleware.AdminAuth{Pool: pool, JWTSecret: cfg.SupabaseJWTSecret, JWKS: jwks}
 	posAuth := middleware.RequirePOSAPIKey(cfg.POSAPIKey)
 
 	mux := http.NewServeMux()
