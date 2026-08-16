@@ -98,6 +98,16 @@ func run() error {
 	mux.HandleFunc("GET /api/v1/products/{slug}", handlers.GetProductBySlug(pool))
 	mux.HandleFunc("GET /api/v1/products/variants/{variant_id}/stock", handlers.GetVariantStock(pool))
 	mux.HandleFunc("POST /api/v1/checkout", handlers.Checkout(pool, fcm))
+
+	// Product/variant/stock management — PRD section 6.7: any admin role
+	// (not Owner-only), unlike coupons/reports/payment-settings below.
+	mux.Handle("POST /api/v1/products", adminAuth.RequireAdmin(handlers.CreateProduct(pool)))
+	mux.Handle("PUT /api/v1/products/{id}", adminAuth.RequireAdmin(handlers.UpdateProduct(pool)))
+	mux.Handle("DELETE /api/v1/products/{id}", adminAuth.RequireAdmin(handlers.DeleteProduct(pool)))
+	mux.Handle("POST /api/v1/products/{id}/variants", adminAuth.RequireAdmin(handlers.CreateVariant(pool)))
+	mux.Handle("PUT /api/v1/products/variants/{variant_id}", adminAuth.RequireAdmin(handlers.UpdateVariant(pool)))
+	mux.Handle("DELETE /api/v1/products/variants/{variant_id}", adminAuth.RequireAdmin(handlers.DeleteVariant(pool)))
+
 	mux.HandleFunc("POST /api/v1/coupons/validate", handlers.ValidateCoupon(pool))
 
 	mux.Handle("POST /api/v1/pos/orders", posAuth(handlers.CreatePOSOrder(pool)))
