@@ -21,3 +21,4 @@ api/*.exe
 api/main
 
 # web/ has its own .gitignore covering node_modules, .next, etc.
+.vercel

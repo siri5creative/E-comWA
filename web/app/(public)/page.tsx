@@ -6,14 +6,24 @@ import { ProductGrid } from "@/components/ProductGrid";
 export const revalidate = 60;
 
 async function getFeaturedProducts() {
-  const res = await goFetch("/products?page_size=8", {
-    next: { revalidate: 60 },
-  });
-  if (!res.ok) {
+  // This page is statically prerendered, including at build time — when
+  // Vercel Services builds web/ and api/ independently (bindings/network
+  // calls don't resolve between services during a build, only at request
+  // time), the API isn't reachable yet. Falling back to [] here lets the
+  // build succeed with an empty section; ISR (revalidate below) fills it
+  // in with real data on the first request once both services are live.
+  try {
+    const res = await goFetch("/products?page_size=8", {
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const body = (await res.json()) as ProductListResponse;
+    return body.data;
+  } catch {
     return [];
   }
-  const body = (await res.json()) as ProductListResponse;
-  return body.data;
 }
 
 export default async function HomePage() {

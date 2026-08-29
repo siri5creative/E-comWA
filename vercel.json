@@ -1,7 +1,7 @@
 {
   "services": {
     "web": { "root": "web/" },
-    "api": { "root": "api/" }
+    "api": { "root": "api/", "framework": "go", "entrypoint": "main.go" }
   },
   "rewrites": [
     { "source": "/api/v1/(.*)", "destination": { "service": "api" } },
