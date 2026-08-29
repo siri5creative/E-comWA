@@ -1,0 +1,1337 @@
+openapi: 3.0.3
+info:
+  title: E-comWA API
+  version: "1.0.0"
+  description: |
+    Go REST API untuk E-comWA — toko online UMKM dengan konfirmasi order &
+    pembayaran manual lewat WhatsApp, dashboard admin (Owner/Staff), sistem
+    kupon, laporan keuangan, dan integrasi dengan aplikasi POS toko fisik
+    lewat satu database bersama.
+
+    Semua endpoint di-mount di bawah prefix `/api/v1`, kecuali `/healthz`.
+
+    ### Autentikasi
+    Ada dua skema, tidak saling menggantikan:
+    - **adminAuth** — Bearer token JWT dari Supabase Auth (login admin
+      Owner/Staff lewat dashboard). Role (`owner` vs `staff`) dicek di
+      backend pada setiap endpoint sensitif, bukan cuma di frontend.
+    - **posAuth** — Bearer token statis `POS_API_KEY`, dipakai khusus oleh
+      aplikasi POS toko fisik (bukan bagian dari repo ini) untuk endpoint
+      `/pos/*`. Login kasir POS sendiri sepenuhnya terpisah dan tidak
+      diimplementasikan di sini.
+
+    ### Format error
+    Semua error memakai bentuk yang sama:
+    `{"error": "<kode>", "message": "<pesan>"}`.
+
+    ### Uang
+    Semua nominal uang adalah **integer Rupiah utuh** (tidak ada desimal),
+    misal `85000` = Rp85.000.
+  contact:
+    name: siri5creative/E-comWA
+    url: https://github.com/siri5creative/E-comWA
+
+servers:
+  - url: https://e-comwa.vercel.app/api/v1
+    description: Production
+  - url: http://localhost:8080/api/v1
+    description: Local dev
+
+tags:
+  - name: Public - Catalog
+    description: Katalog produk & kategori, tanpa autentikasi.
+  - name: Public - Checkout
+    description: Checkout & validasi kupon, tanpa autentikasi.
+  - name: Admin - Products
+    description: Kelola produk/varian/stok — admin (role apapun).
+  - name: Admin - Orders
+    description: Kelola order & status — admin (role apapun).
+  - name: Admin - Coupons
+    description: Kelola kupon — khusus role Owner.
+  - name: Admin - Reports
+    description: Laporan keuangan — khusus role Owner.
+  - name: Admin - Payment Settings
+    description: Pengaturan payment gateway (disiapkan, belum aktif) — khusus role Owner.
+  - name: Admin - Misc
+    description: Profil admin & registrasi device notifikasi.
+  - name: POS Integration
+    description: Endpoint khusus aplikasi POS toko fisik, auth via POS_API_KEY.
+  - name: System
+    description: Health check.
+
+security: []
+
+paths:
+  /healthz:
+    get:
+      tags: [System]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Server hidup.
+
+  /categories:
+    get:
+      tags: [Public - Catalog]
+      summary: Daftar kategori
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Category" }
+
+  /products:
+    get:
+      tags: [Public - Catalog]
+      summary: Daftar produk (katalog publik)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: category
+          in: query
+          description: Filter berdasarkan slug kategori.
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Product" }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+    post:
+      tags: [Admin - Products]
+      summary: Buat produk baru
+      security: [{ adminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductRequest" }
+      responses:
+        "201":
+          description: Produk dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: string, format: uuid } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Slug sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /products/{slug}:
+    get:
+      tags: [Public - Catalog]
+      summary: Detail produk berdasarkan slug
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Product" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /products/{id}:
+    put:
+      tags: [Admin - Products]
+      summary: Update produk
+      security: [{ adminAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProductRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: string, format: uuid } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Slug sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Admin - Products]
+      summary: Hapus produk
+      description: >-
+        Gagal dengan 409 kalau varian produk ini sudah punya riwayat order
+        (ON DELETE RESTRICT).
+      security: [{ adminAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Berhasil dihapus }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Punya riwayat order, tidak bisa dihapus
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /products/{id}/variants:
+    post:
+      tags: [Admin - Products]
+      summary: Tambah varian ke produk
+      security: [{ adminAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VariantRequest" }
+      responses:
+        "201":
+          description: Varian dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: string, format: uuid } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: SKU sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /products/variants/{variant_id}:
+    put:
+      tags: [Admin - Products]
+      summary: Update varian
+      description: >-
+        `stock_quantity` adalah pengganti total (bukan delta) — admin
+        memasukkan hasil hitung stok setelah restock.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/VariantId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VariantRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: string, format: uuid } }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: SKU sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Admin - Products]
+      summary: Hapus varian
+      description: Gagal dengan 409 kalau varian ini sudah punya riwayat order.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/VariantId"
+      responses:
+        "204": { description: Berhasil dihapus }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Punya riwayat order, tidak bisa dihapus
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /products/variants/{variant_id}/stock:
+    get:
+      tags: [Public - Catalog]
+      summary: Cek stok satu varian
+      description: >-
+        Publik (kepercayaan sama seperti GET /products) — dipakai juga oleh
+        aplikasi POS untuk cek stok real-time tanpa perlu POS_API_KEY.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/VariantId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  variant_id: { type: string, format: uuid }
+                  stock_quantity: { type: integer }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /checkout:
+    post:
+      tags: [Public - Checkout]
+      summary: Checkout / buat order online
+      description: >-
+        Membuat/update customer, mengunci & mengurangi stok tiap item secara
+        atomik dalam satu transaksi (all-or-nothing — kalau satu item gagal,
+        seluruh order dibatalkan), lalu opsional menerapkan kupon (divalidasi
+        ulang secara otoritatif, tidak percaya hasil validasi sisi klien).
+        Order baru selalu berstatus `menunggu_konfirmasi` — tidak ada
+        pemrosesan pembayaran otomatis, konfirmasi selalu manual oleh admin
+        lewat WhatsApp.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutRequest" }
+            example:
+              name: "Budi Santoso"
+              whatsapp_number: "081234567890"
+              items:
+                - product_variant_id: "b93e7737-bde3-4668-b8de-b904333fc9e2"
+                  quantity: 2
+              coupon_code: "DUMMY10"
+      responses:
+        "201":
+          description: Order dibuat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "409":
+          description: Stok tidak cukup, atau kupon tidak valid
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/InsufficientStockError"
+                  - $ref: "#/components/schemas/CouponInvalidError"
+
+  /coupons/validate:
+    post:
+      tags: [Public - Checkout]
+      summary: Pratinjau validasi kupon
+      description: >-
+        Selalu balas 200 dengan field `valid` — "tidak valid" adalah hasil
+        bisnis normal (kadaluarsa/sudah dipakai/kuota habis), bukan error
+        HTTP. Ini cuma pratinjau read-only, tidak memakai kuota kupon;
+        hanya POST /checkout yang mengonsumsinya secara otoritatif.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, example: "DUMMY10" }
+                whatsapp_number:
+                  type: string
+                  description: Dipakai untuk cek batas pemakaian per-customer.
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      product_variant_id: { type: string, format: uuid }
+                      quantity: { type: integer }
+      responses:
+        "200":
+          description: OK (cek field `valid`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid: { type: boolean }
+                  code: { type: string }
+                  discount_type: { $ref: "#/components/schemas/CouponDiscountType" }
+                  discount_amount: { type: integer, format: int64 }
+                  reason: { type: string, description: "Hanya ada saat valid=false" }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+
+  /admin/me:
+    get:
+      tags: [Admin - Misc]
+      summary: Profil admin yang sedang login
+      security: [{ adminAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Admin" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /admin-devices:
+    post:
+      tags: [Admin - Misc]
+      summary: Registrasi FCM device token untuk push notification
+      security: [{ adminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fcm_device_token]
+              properties:
+                fcm_device_token: { type: string }
+      responses:
+        "204": { description: Tersimpan }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders:
+    get:
+      tags: [Admin - Orders]
+      summary: Daftar order
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/OrderStatus" }
+        - name: channel
+          in: query
+          schema: { $ref: "#/components/schemas/OrderChannel" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderListItem" }
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /orders/{id}:
+    get:
+      tags: [Admin - Orders]
+      summary: Detail order
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /orders/{id}/status:
+    patch:
+      tags: [Admin - Orders]
+      summary: Update status order dan/atau ongkir
+      description: |
+        Salah satu atau kedua field boleh dikirim. `total` selalu dihitung
+        ulang sebagai `subtotal - discount_amount + shipping_cost`.
+
+        **Aturan alur status (tidak bisa dilewati):**
+        - `menunggu_konfirmasi` → `menunggu_pembayaran` | `dibatalkan`
+        - `menunggu_pembayaran` → `diproses` | `dibatalkan`
+        - `diproses` → `dikirim`
+        - `dikirim` → `selesai`
+        - `selesai`, `dibatalkan` — final, tidak bisa diubah lagi
+
+        `diproses` **hanya** bisa dicapai dari `menunggu_pembayaran` — ini
+        aturan keras: pembayaran harus dikonfirmasi manual oleh admin lebih
+        dulu, tidak ada jalur otomatis yang melewati ini.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { $ref: "#/components/schemas/OrderStatus" }
+                shipping_cost:
+                  type: integer
+                  format: int64
+                  description: Ongkir hasil kesepakatan manual lewat WhatsApp.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  status: { $ref: "#/components/schemas/OrderStatus" }
+                  shipping_cost: { type: integer, format: int64 }
+                  total: { type: integer, format: int64 }
+                  next_statuses:
+                    type: array
+                    items: { $ref: "#/components/schemas/OrderStatus" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Order sudah final, atau transisi status tidak diizinkan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /orders/{id}/wa-message:
+    get:
+      tags: [Admin - Orders]
+      summary: Generate pesan & link wa.me sesuai status order
+      description: >-
+        Admin klik, WhatsApp terbuka dengan teks sudah terisi otomatis;
+        admin tetap yang meninjau & mengirim sendiri — tidak ada pesan
+        otomatis terkirim dari server.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  whatsapp_number: { type: string, example: "6281234567890" }
+                  message: { type: string }
+                  wa_link: { type: string, format: uri }
+        "400":
+          description: Order tidak punya nomor WhatsApp customer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /coupons:
+    get:
+      tags: [Admin - Coupons]
+      summary: Daftar kupon
+      security: [{ adminAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Coupon" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Admin - Coupons]
+      summary: Buat kupon baru
+      security: [{ adminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponRequest" }
+      responses:
+        "201":
+          description: Kupon dibuat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409":
+          description: Kode kupon sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /coupons/{id}:
+    get:
+      tags: [Admin - Coupons]
+      summary: Detail kupon
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/CouponId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Coupon" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [Admin - Coupons]
+      summary: Update kupon
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/CouponId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CouponRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  code: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Kode kupon sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Admin - Coupons]
+      summary: Hapus kupon
+      description: >-
+        Order lama tetap menyimpan discount_amount-nya sendiri (snapshot);
+        orders.coupon_id jadi NULL, riwayat finansial tidak terpengaruh.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/CouponId"
+      responses:
+        "204": { description: Berhasil dihapus }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /reports/summary:
+    get:
+      tags: [Admin - Reports]
+      summary: Ringkasan order & revenue per periode
+      description: >-
+        Hanya order berstatus `selesai` yang dihitung sebagai revenue.
+        `discount_amount` mengurangi net income; `shipping_cost` tidak
+        (diteruskan ke kurir, bukan pendapatan toko).
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ReportFrom"
+        - $ref: "#/components/parameters/ReportTo"
+        - $ref: "#/components/parameters/ReportChannel"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReportSummary" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /reports/top-products:
+    get:
+      tags: [Admin - Reports]
+      summary: Produk terlaris per periode
+      description: Gabungan channel online + POS.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ReportFrom"
+        - $ref: "#/components/parameters/ReportTo"
+        - $ref: "#/components/parameters/ReportChannel"
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10, maximum: 50 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/TopProductRow" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /reports/sales-trend:
+    get:
+      tags: [Admin - Reports]
+      summary: Tren penjualan harian per periode
+      description: >-
+        Selalu satu baris per hari kalender dalam rentang (zero-filled).
+        Saat `channel` tidak diset, juga menyertakan breakdown online/POS
+        per hari.
+      security: [{ adminAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ReportFrom"
+        - $ref: "#/components/parameters/ReportTo"
+        - $ref: "#/components/parameters/ReportChannel"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/SalesTrendDay" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /payment-settings:
+    get:
+      tags: [Admin - Payment Settings]
+      summary: Lihat status pengaturan payment gateway
+      description: >-
+        Tidak pernah mengembalikan kredensial (bahkan yang terenkripsi) —
+        hanya status apakah sudah dikonfigurasi.
+      security: [{ adminAuth: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentSettingsView" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Admin - Payment Settings]
+      summary: Simpan pengaturan payment gateway
+      description: >-
+        Partial update — provider/is_sandbox/is_active bisa diubah tanpa
+        mengirim ulang credentials. Hanya ada satu baris settings.
+      security: [{ adminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider: { type: string, enum: [midtrans, xendit] }
+                is_sandbox: { type: boolean }
+                credentials:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: Wajib diisi saat pertama kali menyimpan.
+                is_active: { type: boolean }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaymentSettingsView" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503":
+          description: PAYMENT_GATEWAY_ENCRYPTION_KEY belum diset di server
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /payment-settings/test:
+    post:
+      tags: [Admin - Payment Settings]
+      summary: Tes koneksi kredensial payment gateway
+      description: >-
+        Menguji kredensial persis seperti yang diketik di form, sebelum
+        disimpan — tidak pernah membaca dari database.
+      security: [{ adminAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, credentials]
+              properties:
+                provider: { type: string, enum: [midtrans, xendit] }
+                is_sandbox: { type: boolean }
+                credentials:
+                  type: object
+                  additionalProperties: { type: string }
+                  description: >-
+                    `{"server_key": "..."}` untuk midtrans,
+                    `{"secret_key": "..."}` untuk xendit.
+      responses:
+        "200":
+          description: OK (cek field `success`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  message: { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /pos/orders:
+    post:
+      tags: [POS Integration]
+      summary: Buat transaksi POS
+      description: >-
+        Berbeda dari checkout online: transaksi POS langsung final
+        (`selesai`) saat itu juga — tidak ada status menunggu
+        konfirmasi/pembayaran, tidak ada shipping, customer_id opsional
+        (pembeli walk-in tidak wajib terdaftar), dan tidak mendukung kupon.
+        Stok dikunci dengan mekanisme atomik all-or-nothing yang sama
+        dengan checkout online.
+      security: [{ posAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items: { $ref: "#/components/schemas/OrderItemRequest" }
+                payment_method:
+                  type: string
+                  example: "cash"
+                customer_name:
+                  type: string
+                  description: Default "Pelanggan POS" kalau whatsapp diisi tapi nama kosong.
+                customer_whatsapp:
+                  type: string
+                  description: Opsional — kalau diisi, dinormalisasi ke format 62xxx.
+      responses:
+        "201":
+          description: Transaksi dibuat
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/POSOrder" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: Stok tidak cukup
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InsufficientStockError" }
+
+  /pos/orders/{order_id}:
+    get:
+      tags: [POS Integration]
+      summary: Ambil detail transaksi POS
+      description: Untuk cetak ulang struk atau lookup riwayat dari sisi POS.
+      security: [{ posAuth: [] }]
+      parameters:
+        - name: order_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/POSOrderDetail" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    adminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Access token Supabase Auth milik akun admin (Owner/Staff). Dapatkan
+        dari `supabase.auth.signInWithPassword(...)` di sisi frontend.
+    posAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Nilai statis `POS_API_KEY` yang di-generate & dibagikan ke tim POS
+        lewat channel privat (bukan self-service).
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, default: 1, minimum: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 }
+    VariantId:
+      name: variant_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CouponId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ReportFrom:
+      name: from
+      in: query
+      required: true
+      description: Format YYYY-MM-DD, inklusif.
+      schema: { type: string, format: date }
+    ReportTo:
+      name: to
+      in: query
+      required: true
+      description: Format YYYY-MM-DD, inklusif.
+      schema: { type: string, format: date }
+    ReportChannel:
+      name: channel
+      in: query
+      schema: { $ref: "#/components/schemas/OrderChannel" }
+
+  responses:
+    ValidationError:
+      description: Input tidak valid
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Token tidak ada/tidak valid/kedaluwarsa
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Terautentikasi tapi bukan admin, atau role tidak cukup (butuh Owner)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource tidak ditemukan
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: "validation_error" }
+        message: { type: string, example: "name wajib diisi" }
+
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        page_size: { type: integer }
+        total: { type: integer, format: int64 }
+
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+
+    ProductVariant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        variant_name: { type: string, example: "42" }
+        sku: { type: string, nullable: true }
+        price: { type: integer, format: int64, example: 899000 }
+        stock_quantity: { type: integer }
+
+    Product:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string, nullable: true }
+        cover_image_url: { type: string, nullable: true }
+        category:
+          allOf: [{ $ref: "#/components/schemas/Category" }]
+          nullable: true
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/ProductVariant" }
+
+    ProductRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        description: { type: string, nullable: true }
+        category_id: { type: string, format: uuid, nullable: true }
+        cover_image_url: { type: string, nullable: true }
+
+    VariantRequest:
+      type: object
+      required: [variant_name, price, stock_quantity]
+      properties:
+        variant_name: { type: string, example: "42" }
+        sku: { type: string, nullable: true }
+        price: { type: integer, format: int64, minimum: 0 }
+        stock_quantity: { type: integer, minimum: 0 }
+
+    OrderItemRequest:
+      type: object
+      required: [product_variant_id, quantity]
+      properties:
+        product_variant_id: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
+
+    CheckoutRequest:
+      type: object
+      required: [name, whatsapp_number, items]
+      properties:
+        name: { type: string }
+        whatsapp_number:
+          type: string
+          description: Dinormalisasi otomatis ke format 62xxx.
+          example: "081234567890"
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/OrderItemRequest" }
+        coupon_code: { type: string, nullable: true }
+
+    OrderChannel:
+      type: string
+      enum: [online, pos]
+
+    OrderStatus:
+      type: string
+      description: |
+        Alur: menunggu_konfirmasi → menunggu_pembayaran → diproses → dikirim
+        → selesai, dengan dibatalkan hanya dari dua status pertama.
+      enum:
+        - menunggu_konfirmasi
+        - menunggu_pembayaran
+        - diproses
+        - dikirim
+        - selesai
+        - dibatalkan
+
+    Order:
+      type: object
+      properties:
+        order_id: { type: string, format: uuid }
+        invoice_number: { type: string, example: "INV20260829-0001" }
+        channel: { $ref: "#/components/schemas/OrderChannel" }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        coupon_code: { type: string, nullable: true }
+        subtotal: { type: integer, format: int64 }
+        discount_amount: { type: integer, format: int64 }
+        shipping_cost:
+          type: integer
+          format: int64
+          description: Selalu 0 saat checkout — diisi manual admin belakangan.
+        total: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    OrderListItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        invoice_number: { type: string }
+        channel: { $ref: "#/components/schemas/OrderChannel" }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        customer_name: { type: string, nullable: true }
+        customer_whatsapp: { type: string, nullable: true }
+        subtotal: { type: integer, format: int64 }
+        discount_amount: { type: integer, format: int64 }
+        shipping_cost: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    OrderDetail:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        invoice_number: { type: string }
+        channel: { $ref: "#/components/schemas/OrderChannel" }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        next_statuses:
+          type: array
+          items: { $ref: "#/components/schemas/OrderStatus" }
+        customer:
+          type: object
+          nullable: true
+          properties:
+            name: { type: string }
+            whatsapp_number: { type: string }
+        subtotal: { type: integer, format: int64 }
+        discount_amount: { type: integer, format: int64 }
+        shipping_cost: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        shipping_note: { type: string, nullable: true }
+        payment_proof_note: { type: string, nullable: true }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              product_variant_id: { type: string, format: uuid }
+              product_name: { type: string }
+              variant_name: { type: string }
+              quantity: { type: integer }
+              price_at_purchase: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    InsufficientStockError:
+      type: object
+      properties:
+        error: { type: string, example: "insufficient_stock" }
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              product_variant_id: { type: string, format: uuid }
+              requested: { type: integer }
+              available: { type: integer }
+
+    CouponInvalidError:
+      type: object
+      properties:
+        error: { type: string, example: "coupon_invalid" }
+        reason:
+          type: string
+          enum:
+            - not_found
+            - inactive
+            - not_yet_valid
+            - expired
+            - quota_exhausted
+            - already_used
+            - min_spend_not_met
+            - product_not_eligible
+            - bundle_incomplete
+        message: { type: string }
+
+    CouponDiscountType:
+      type: string
+      enum: [total_belanja, item_tertentu, event, bundle]
+
+    CouponDiscountValueType:
+      type: string
+      enum: [fixed, percentage]
+
+    Coupon:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        code: { type: string, example: "DUMMY10" }
+        discount_type: { $ref: "#/components/schemas/CouponDiscountType" }
+        discount_value_type: { $ref: "#/components/schemas/CouponDiscountValueType" }
+        discount_value:
+          type: number
+          description: Rupiah kalau `fixed`, persen (0-100] kalau `percentage`.
+        min_spend: { type: integer, format: int64 }
+        valid_from: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        max_total_usage: { type: integer, nullable: true }
+        max_usage_per_customer: { type: integer, nullable: true }
+        current_usage_count: { type: integer }
+        is_active: { type: boolean }
+        product_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Hanya relevan untuk discount_type item_tertentu/bundle.
+        created_at: { type: string, format: date-time }
+
+    CouponRequest:
+      type: object
+      required: [code, discount_type, discount_value_type, discount_value, valid_from, valid_until]
+      properties:
+        code: { type: string }
+        discount_type: { $ref: "#/components/schemas/CouponDiscountType" }
+        discount_value_type: { $ref: "#/components/schemas/CouponDiscountValueType" }
+        discount_value: { type: number }
+        min_spend: { type: integer, format: int64, default: 0 }
+        valid_from: { type: string, format: date-time }
+        valid_until: { type: string, format: date-time }
+        max_total_usage: { type: integer, nullable: true }
+        max_usage_per_customer: { type: integer, nullable: true }
+        is_active: { type: boolean, default: true }
+        product_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: Wajib diisi untuk discount_type item_tertentu/bundle.
+
+    Admin:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        role: { type: string, enum: [owner, staff] }
+        created_at: { type: string, format: date-time }
+
+    ReportSummary:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from: { type: string }
+            to: { type: string }
+        channel_filter: { type: string, example: "all" }
+        order_counts:
+          type: object
+          properties:
+            total: { type: integer, format: int64 }
+            by_status:
+              type: object
+              additionalProperties: { type: integer, format: int64 }
+        revenue:
+          type: object
+          properties:
+            gross: { type: integer, format: int64 }
+            discount_total: { type: integer, format: int64 }
+            shipping_total: { type: integer, format: int64 }
+            net: { type: integer, format: int64 }
+            by_channel:
+              type: object
+              nullable: true
+              description: Hanya ada saat parameter channel tidak diset.
+              properties:
+                online: { type: integer, format: int64 }
+                pos: { type: integer, format: int64 }
+
+    TopProductRow:
+      type: object
+      properties:
+        product_id: { type: string, format: uuid }
+        product_name: { type: string }
+        variant_id: { type: string, format: uuid }
+        variant_name: { type: string }
+        quantity_sold: { type: integer, format: int64 }
+        revenue: { type: integer, format: int64 }
+
+    SalesTrendDay:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        total_orders: { type: integer, format: int64 }
+        total_revenue: { type: integer, format: int64 }
+        online_orders: { type: integer, format: int64, nullable: true }
+        online_revenue: { type: integer, format: int64, nullable: true }
+        pos_orders: { type: integer, format: int64, nullable: true }
+        pos_revenue: { type: integer, format: int64, nullable: true }
+
+    PaymentSettingsView:
+      type: object
+      properties:
+        configured: { type: boolean }
+        provider: { type: string, enum: [midtrans, xendit], nullable: true }
+        is_sandbox: { type: boolean, nullable: true }
+        is_active: { type: boolean, nullable: true }
+        has_credentials: { type: boolean }
+        updated_at: { type: string, format: date-time, nullable: true }
+
+    POSOrder:
+      type: object
+      properties:
+        order_id: { type: string, format: uuid }
+        invoice_number: { type: string, example: "POS20260829-0001" }
+        channel: { type: string, example: "pos" }
+        status: { type: string, example: "selesai" }
+        subtotal: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        created_at: { type: string, format: date-time }
+
+    POSOrderDetail:
+      type: object
+      properties:
+        order_id: { type: string, format: uuid }
+        invoice_number: { type: string }
+        channel: { type: string, example: "pos" }
+        status: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              product_variant_id: { type: string, format: uuid }
+              product_name: { type: string }
+              variant_name: { type: string }
+              quantity: { type: integer }
+              price_at_purchase: { type: integer, format: int64 }
+        subtotal: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        payment_method: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
